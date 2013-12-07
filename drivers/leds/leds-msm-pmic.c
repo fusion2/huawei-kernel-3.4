@@ -18,9 +18,7 @@
 #include <linux/leds.h>
 
 #include <mach/pmic.h>
-#include <mach/rpc_pmapp.h>
 
-#include <linux/module.h>
 #ifdef CONFIG_HUAWEI_LEDS_PMIC
 #include <linux/mfd/pmic8058.h>
 #include <mach/gpio.h>
@@ -34,7 +32,8 @@
 #endif
 #define MAX_KEYPAD_BL_LEVEL        16
 
-/*U8860lp use GPIO 25 Of PIMIC to driver the led backlight, Then configure it as PWM to driver LED*/
+#define PM8058_GPIO_PM_TO_SYS(pm_gpio)     (pm_gpio + NR_GPIO_IRQS)
+
 #ifdef CONFIG_HUAWEI_LEDS_PMIC
 #define LED_PWM_PERIOD ( NSEC_PER_SEC / ( 22 * 1000 ) )        /* ns, period of 22Khz */
 #define LED_PWM_LEVEL 255
@@ -52,7 +51,6 @@
 
 static struct pwm_device *bl_pwm;
 
-/*configure GPIO 25 Of PIMIC as PWM to driver LED*/
 int led_pwm_gpio_config(void)
 {
     int rc;
@@ -71,7 +69,8 @@ int led_pwm_gpio_config(void)
     || machine_is_msm8255_u8860_r()
          ||machine_is_msm8255_u8860_51())
     {
-        rc = pm8xxx_gpio_config( 24, &backlight_drv);
+                /* renew config the gpio value */
+        rc = pm8xxx_gpio_config( PM8058_GPIO_PM_TO_SYS(24), &backlight_drv);    
     }
     else
     {
@@ -92,23 +91,20 @@ static void msm_keypad_bl_led_set(struct led_classdev *led_cdev,
 {
 #ifdef CONFIG_HUAWEI_LEDS_PMIC
     int ret = 0;
-/* 7x27a platform use mpp7 as keypad backlight */
         #ifdef CONFIG_ARCH_MSM7X27A
-                ret = pmic_secure_mpp_config_i_sink(PM_MPP_7, PM_MPP__I_SINK__LEVEL_5mA, \
+            ret = pmic_secure_mpp_config_i_sink(PM_MPP_7, PM_MPP__I_SINK__LEVEL_5mA, \
                     (!!value) ? PM_MPP__I_SINK__SWITCH_ENA : PM_MPP__I_SINK__SWITCH_DIS);
-          else
-            {
-                /* use pwm to control the brightness of keypad backlight*/
-                /* make sure the led is drived by pwm when */
-                /* the system sleep indicator switch is on */
-                pmapp_button_backlight_init();
-
-                ret = pmapp_button_backlight_set_brightness(value);
-            }
         #else
             if(machine_is_msm7x30_u8800() || machine_is_msm7x30_u8800_51() || machine_is_msm8255_u8800_pro() ) 
             {
-              ret = pmic_set_led_intensity(LED_KEYPAD, !( ! value));
+                        if( LED_BRIGHTNESS_OFF >= value || LED_PWM_LEVEL < value )
+                        {
+                                ret = pmic_set_keyled_intensity(LED_KEYPAD, LED_BRIGHTNESS_OFF);
+                        }
+                        else
+                        {
+                                ret = pmic_set_keyled_intensity(LED_KEYPAD, 100);        
+                        }
             }
             else if( machine_is_msm8255_u8860lp()        
         || machine_is_msm8255_u8860_r()
@@ -122,7 +118,6 @@ static void msm_keypad_bl_led_set(struct led_classdev *led_cdev,
             {   
               ret = pmic_set_mpp6_led_intensity(!( ! value));
             }
-                /*< when the value between 0 and 255,set the key brightness is LED_BRIGHRNESS_LEVEL or set the brightness is 0 */
                 else if( machine_is_msm8255_u8860() 
                       || machine_is_msm8255_c8860() 
                           || machine_is_msm8255_u8860_92())
@@ -138,7 +133,6 @@ static void msm_keypad_bl_led_set(struct led_classdev *led_cdev,
                 }
     else if(machine_is_msm8255_u8680())
     {   
-            /* Set keypad led brightness level 12 for U8680 */
         if(LED_BRIGHTNESS_OFF >= value || LED_PWM_LEVEL < value)
         {
             ret = pmic_set_keyled_intensity(LED_KEYPAD,LED_BRIGHTNESS_OFF);
@@ -150,7 +144,6 @@ static void msm_keypad_bl_led_set(struct led_classdev *led_cdev,
     }
     else if(machine_is_msm8255_u8667())
     {   
-        /* Set keypad led brightness level 16 for U8667 */
         if(LED_BRIGHTNESS_OFF >= value || LED_PWM_LEVEL < value)
         {
             ret = pmic_set_keyled_intensity(LED_KEYPAD, LED_BRIGHTNESS_OFF);
@@ -200,8 +193,7 @@ static int msm_pmic_led_probe(struct platform_device *pdev)
         bl_pwm = pwm_request(LED_PM_GPIO25_PWM_ID, "keypad backlight");
     }
 #endif
-    /* use pwm to control the brightness of keypad backlight*/
-    pmapp_button_backlight_init();
+
         msm_keypad_bl_led_set(&msm_kp_bl_led, LED_OFF);
         return rc;
 }
@@ -217,7 +209,6 @@ static int __devexit msm_pmic_led_remove(struct platform_device *pdev)
 static int msm_pmic_led_suspend(struct platform_device *dev,
                 pm_message_t state)
 {
-/* if phone is set in system sleep indicator mode and is sleepping,bl_pwm must be free for GPIO_24 is being controled by modem*/
 #ifdef CONFIG_HUAWEI_LEDS_PMIC
     if( machine_is_msm8255_u8860lp()
     || machine_is_msm8255_u8860_r()
@@ -227,13 +218,11 @@ static int msm_pmic_led_suspend(struct platform_device *dev,
     }
 #endif
         led_classdev_suspend(&msm_kp_bl_led);
-
         return 0;
 }
 
 static int msm_pmic_led_resume(struct platform_device *dev)
 {
-/* if phone is set in system sleep indicator mode and awoke,GPIO_24 is relseased so it should be requested*/
 #ifdef CONFIG_HUAWEI_LEDS_PMIC
     if( machine_is_msm8255_u8860lp()
     || machine_is_msm8255_u8860_r()
